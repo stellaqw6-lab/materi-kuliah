@@ -119,7 +119,7 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
       <div><label for="mType">Jenis</label>
         <select id="mType"><option>Slide</option><option>Dokumen</option><option>Rekaman</option><option>Gambar</option><option>Tugas</option></select></div>
     </div>
-    <label for="mFile">File (PDF, gambar, dokumen, dll)</label>
+    <label for="mFile">File (PDF, gambar, dokumen — maks 4 MB)</label>
     <input id="mFile" type="file">
     <p id="mCur" style="font:.8rem var(--sans);color:var(--muted);margin:4px 0 0"></p>
     <div id="mProgWrap" class="bar" style="margin-top:8px;max-width:none" hidden><i id="mProgBar" style="width:0"></i></div>
@@ -134,7 +134,6 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getDatabase, ref, push, set, update, remove, onValue, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-import { getStorage, ref as sref, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
 /* ====== ISI DI SINI dengan config dari Firebase Console ====== */
 const firebaseConfig = {
@@ -142,7 +141,6 @@ const firebaseConfig = {
   authDomain: "store-minzy.firebaseapp.com",
   databaseURL: "https://store-minzy-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "store-minzy",
-  storageBucket: "store-minzy.firebasestorage.app",
   appId: "1:746471870516:web:a937e409565d90424b3a61"
 };
 /* ============================================================= */
@@ -159,7 +157,6 @@ if (!firebaseConfig.databaseURL) { $("setup").hidden = false; $("app").hidden = 
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const storage = getStorage(app);
 let auth = null;
 try { auth = getAuth(app); } catch {}
 
@@ -254,11 +251,13 @@ function renderList() {
   weeks.forEach(w => {
     box.append(el("h2", { className: "wk" }, w ? "Pertemuan " + w : "Tanpa pertemuan"));
     list.filter(m => (m.week || 0) === w).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(m => {
-      const row = el("a", {
-        className: "item" + (admin && m.done ? " done" : ""),
-        href: m.url || "#", target: m.url ? "_blank" : "", rel: "noopener noreferrer"
-      });
-      if (!m.url) row.onclick = e => e.preventDefault();
+      const row = el("a", { className: "item" + (admin && m.done ? " done" : ""), href: "#" });
+      row.onclick = async e => {
+        e.preventDefault();
+        if (!m.fileData) return;
+        const blob = await (await fetch(m.fileData)).blob();
+        window.open(URL.createObjectURL(blob), "_blank", "noopener");
+      };
       if (admin) {
         const chk = el("input", { type: "checkbox", checked: !!m.done, ariaLabel: "Sudah dipelajari" });
         chk.style.width = "auto";
@@ -306,12 +305,21 @@ function openMat(m) {
   $("matDlg").showModal();
 }
 const fmtKB = b => (b / 1024).toFixed(0) + " KB";
-let curTask = null;
-$("mCancel").onclick = () => { if (curTask) curTask.cancel(); };
+const MAX_FILE = 4 * 1024 * 1024;
+function readAsDataURL(file, onProgress) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(new Error("Gagal membaca file."));
+    r.readAsDataURL(file);
+  });
+}
 $("matForm").onsubmit = async e => {
   e.preventDefault();
   const file = $("mFile").files[0];
   if (!file && !editId) { $("mErr").textContent = "Pilih file dulu."; return; }
+  if (file && file.size > MAX_FILE) { $("mErr").textContent = "File terlalu besar (maks 4 MB). Kompres dulu, lalu coba lagi."; return; }
   const btn = $("mSubmit"); btn.disabled = true;
   $("mErr").textContent = "";
   try {
@@ -320,30 +328,21 @@ $("matForm").onsubmit = async e => {
     if (file) {
       $("mFile").disabled = true;
       $("mProgWrap").hidden = false;
-      btn.textContent = "Mengunggah...";
-      const path = "materials/" + (editId || crypto.randomUUID()) + "/" + file.name;
-      const fref = sref(storage, path);
-      const task = uploadBytesResumable(fref, file);
-      curTask = task;
-      const t0 = Date.now();
-      await new Promise((res, rej) => task.on("state_changed", snap => {
-        const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
+      btn.textContent = "Memproses...";
+      const dataUrl = await readAsDataURL(file, (loaded, total) => {
+        const pct = Math.round(loaded / total * 100);
         $("mProgBar").style.width = pct + "%";
-        const secs = (Date.now() - t0) / 1000;
-        const kbps = secs > 0 ? (snap.bytesTransferred / 1024 / secs) : 0;
-        $("mProgTxt").textContent = pct + "% — " + fmtKB(snap.bytesTransferred) + " / " + fmtKB(snap.totalBytes) + (kbps > 0 ? " (" + kbps.toFixed(0) + " KB/s)" : "");
-      }, rej, res));
-      curTask = null;
-      data.url = await getDownloadURL(fref);
+        $("mProgTxt").textContent = pct + "% — " + fmtKB(loaded) + " / " + fmtKB(total);
+      });
+      $("mProgBar").style.width = "100%"; $("mProgTxt").textContent = "100% — " + fmtKB(file.size) + " / " + fmtKB(file.size);
+      data.fileData = dataUrl;
       data.fileName = file.name;
-      data.filePath = path;
     }
     if (editId) await update(ref(db, "materials/" + editId), data);
     else await set(push(ref(db, "materials")), { ...data, courseId: current, done: false, createdAt: serverTimestamp() });
     $("matDlg").close();
   } catch (err) {
-    curTask = null;
-    $("mErr").textContent = err.code === "storage/canceled" ? "Unggahan dibatalkan." : "Gagal mengunggah (" + (err.code || err.message) + ").";
+    $("mErr").textContent = "Gagal menyimpan (" + (err.code || err.message) + "). Kalau ini soal ukuran, coba file lebih kecil.";
   } finally {
     btn.disabled = false; btn.textContent = "Simpan materi";
     $("mFile").disabled = false; $("mProgWrap").hidden = true;
@@ -355,13 +354,11 @@ document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => b.close
 // ---------- Hapus ----------
 async function delMat(m) {
   if (!confirm("Hapus materi \"" + m.title + "\"?")) return;
-  if (m.filePath) try { await deleteObject(sref(storage, m.filePath)); } catch {}
   await remove(ref(db, "materials/" + m.id));
 }
 async function delCourse(c) {
   const own = mats.filter(m => m.courseId === c.id);
   if (!confirm("Hapus matkul \"" + c.name + "\" beserta " + own.length + " materinya? Ini tidak bisa dibatalkan.")) return;
-  for (const m of own) if (m.filePath) try { await deleteObject(sref(storage, m.filePath)); } catch {}
   const gone = { ["courses/" + c.id]: null };
   own.forEach(m => { gone["materials/" + m.id] = null; });
   await update(ref(db), gone);
