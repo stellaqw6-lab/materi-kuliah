@@ -122,9 +122,11 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
     <label for="mFile">File (PDF, gambar, dokumen, dll)</label>
     <input id="mFile" type="file">
     <p id="mCur" style="font:.8rem var(--sans);color:var(--muted);margin:4px 0 0"></p>
+    <div id="mProgWrap" class="bar" style="margin-top:8px;max-width:none" hidden><i id="mProgBar" style="width:0"></i></div>
+    <p id="mProgTxt" style="font:.8rem var(--sans);color:var(--muted);margin:4px 0 0"></p>
     <label for="mBody">Catatan tambahan (opsional)</label><textarea id="mBody" style="min-height:70px"></textarea>
     <p id="mErr" style="color:#b3372f;font:.85rem var(--sans);margin:8px 0 0"></p>
-    <div class="foot"><button type="button" class="btn" data-close>Batal</button><button class="btn solid" id="mSubmit">Simpan materi</button></div>
+    <div class="foot"><button type="button" class="btn" id="mCancel" data-close>Batal</button><button class="btn solid" id="mSubmit">Simpan materi</button></div>
   </form>
 </dialog>
 
@@ -132,7 +134,7 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getDatabase, ref, push, set, update, remove, onValue, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-import { getStorage, ref as sref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+import { getStorage, ref as sref, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
 /* ====== ISI DI SINI dengan config dari Firebase Console ====== */
 const firebaseConfig = {
@@ -300,21 +302,38 @@ function openMat(m) {
   $("mType").value = m?.type || "Slide"; $("mBody").value = m?.body || "";
   $("mFile").value = ""; $("mErr").textContent = "";
   $("mCur").textContent = m?.fileName ? "File saat ini: " + m.fileName + " (biarkan kosong untuk tetap memakainya)" : "";
+  $("mProgWrap").hidden = true; $("mProgBar").style.width = "0"; $("mProgTxt").textContent = "";
   $("matDlg").showModal();
 }
+const fmtKB = b => (b / 1024).toFixed(0) + " KB";
+let curTask = null;
+$("mCancel").onclick = () => { if (curTask) curTask.cancel(); };
 $("matForm").onsubmit = async e => {
   e.preventDefault();
   const file = $("mFile").files[0];
   if (!file && !editId) { $("mErr").textContent = "Pilih file dulu."; return; }
-  const btn = $("mSubmit"); btn.disabled = true; btn.textContent = "Mengunggah...";
+  const btn = $("mSubmit"); btn.disabled = true;
   $("mErr").textContent = "";
   try {
     const data = { title: $("mTitle").value.trim(), week: parseInt($("mWeek").value) || 0,
       type: $("mType").value, body: $("mBody").value };
     if (file) {
+      $("mFile").disabled = true;
+      $("mProgWrap").hidden = false;
+      btn.textContent = "Mengunggah...";
       const path = "materials/" + (editId || crypto.randomUUID()) + "/" + file.name;
       const fref = sref(storage, path);
-      await uploadBytes(fref, file);
+      const task = uploadBytesResumable(fref, file);
+      curTask = task;
+      const t0 = Date.now();
+      await new Promise((res, rej) => task.on("state_changed", snap => {
+        const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
+        $("mProgBar").style.width = pct + "%";
+        const secs = (Date.now() - t0) / 1000;
+        const kbps = secs > 0 ? (snap.bytesTransferred / 1024 / secs) : 0;
+        $("mProgTxt").textContent = pct + "% — " + fmtKB(snap.bytesTransferred) + " / " + fmtKB(snap.totalBytes) + (kbps > 0 ? " (" + kbps.toFixed(0) + " KB/s)" : "");
+      }, rej, res));
+      curTask = null;
       data.url = await getDownloadURL(fref);
       data.fileName = file.name;
       data.filePath = path;
@@ -323,9 +342,11 @@ $("matForm").onsubmit = async e => {
     else await set(push(ref(db, "materials")), { ...data, courseId: current, done: false, createdAt: serverTimestamp() });
     $("matDlg").close();
   } catch (err) {
-    $("mErr").textContent = "Gagal mengunggah (" + (err.code || err.message) + ").";
+    curTask = null;
+    $("mErr").textContent = err.code === "storage/canceled" ? "Unggahan dibatalkan." : "Gagal mengunggah (" + (err.code || err.message) + ").";
   } finally {
     btn.disabled = false; btn.textContent = "Simpan materi";
+    $("mFile").disabled = false; $("mProgWrap").hidden = true;
   }
 };
 
