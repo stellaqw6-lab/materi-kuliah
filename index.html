@@ -39,16 +39,12 @@ button{cursor:pointer;color:inherit}
 input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);font-size:.95rem}
 textarea{min-height:140px;font-family:var(--serif);resize:vertical}
 h2.wk{font-size:.95rem;margin:22px 0 6px;color:var(--muted);font-weight:700}
-details{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:0 8px 8px 0;margin-bottom:6px}
-summary{display:flex;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;list-style:none;font-weight:500}
-summary::-webkit-details-marker{display:none}
-summary .t{flex:1}
-.done .t{text-decoration:line-through;color:var(--muted)}
+.item{display:flex;gap:10px;align-items:center;padding:10px 12px;text-decoration:none;color:var(--ink);background:var(--card);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:0 8px 8px 0;margin-bottom:2px;font-weight:500;font-family:var(--sans)}
+.item .t{flex:1}
+.item.done .t{text-decoration:line-through;color:var(--muted)}
 .tag{font-size:.75rem;border:1px solid var(--line);border-radius:99px;padding:1px 9px;color:var(--muted);white-space:nowrap}
-.body{padding:2px 14px 14px 14px}
-.body pre{white-space:pre-wrap;font:inherit;margin:0 0 12px;max-width:68ch}
-.body a{color:var(--c);word-break:break-all}
-.acts{display:flex;gap:8px;margin-top:10px}
+.note{margin:-2px 0 8px 16px;padding:0 12px;color:var(--muted);font-size:.9rem;max-width:68ch}
+.acts{display:flex;gap:8px;margin:-2px 0 10px 12px}
 .empty{color:var(--muted);padding:32px 0}
 .panel{max-width:560px;margin:60px auto;padding:0 20px}
 .panel h1{font-size:1.8rem;letter-spacing:-.02em}
@@ -121,11 +117,14 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
     <div class="row">
       <div><label for="mWeek">Pertemuan ke-</label><input id="mWeek" type="number" min="1" max="30"></div>
       <div><label for="mType">Jenis</label>
-        <select id="mType"><option>Catatan</option><option>Ringkasan</option><option>Tautan</option><option>Tugas</option></select></div>
+        <select id="mType"><option>Slide</option><option>Dokumen</option><option>Rekaman</option><option>Gambar</option><option>Tugas</option></select></div>
     </div>
-    <label for="mUrl">Tautan (slide, Drive, rekaman)</label><input id="mUrl" type="url" placeholder="https://">
-    <label for="mBody">Isi catatan</label><textarea id="mBody"></textarea>
-    <div class="foot"><button type="button" class="btn" data-close>Batal</button><button class="btn solid">Simpan materi</button></div>
+    <label for="mFile">File (PDF, gambar, dokumen, dll)</label>
+    <input id="mFile" type="file">
+    <p id="mCur" style="font:.8rem var(--sans);color:var(--muted);margin:4px 0 0"></p>
+    <label for="mBody">Catatan tambahan (opsional)</label><textarea id="mBody" style="min-height:70px"></textarea>
+    <p id="mErr" style="color:#b3372f;font:.85rem var(--sans);margin:8px 0 0"></p>
+    <div class="foot"><button type="button" class="btn" data-close>Batal</button><button class="btn solid" id="mSubmit">Simpan materi</button></div>
   </form>
 </dialog>
 
@@ -133,6 +132,7 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getDatabase, ref, push, set, update, remove, onValue, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { getStorage, ref as sref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
 /* ====== ISI DI SINI dengan config dari Firebase Console ====== */
 const firebaseConfig = {
@@ -140,6 +140,7 @@ const firebaseConfig = {
   authDomain: "store-minzy.firebaseapp.com",
   databaseURL: "https://store-minzy-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "store-minzy",
+  storageBucket: "store-minzy.firebasestorage.app",
   appId: "1:746471870516:web:a937e409565d90424b3a61"
 };
 /* ============================================================= */
@@ -156,6 +157,7 @@ if (!firebaseConfig.databaseURL) { $("setup").hidden = false; $("app").hidden = 
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const storage = getStorage(app);
 let auth = null;
 try { auth = getAuth(app); } catch {}
 
@@ -250,24 +252,23 @@ function renderList() {
   weeks.forEach(w => {
     box.append(el("h2", { className: "wk" }, w ? "Pertemuan " + w : "Tanpa pertemuan"));
     list.filter(m => (m.week || 0) === w).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(m => {
-      const sum = el("summary", {});
+      const row = el("a", {
+        className: "item" + (admin && m.done ? " done" : ""),
+        href: m.url || "#", target: m.url ? "_blank" : "", rel: "noopener noreferrer"
+      });
+      if (!m.url) row.onclick = e => e.preventDefault();
       if (admin) {
         const chk = el("input", { type: "checkbox", checked: !!m.done, ariaLabel: "Sudah dipelajari" });
         chk.style.width = "auto";
-        chk.onclick = e => e.stopPropagation();
-        chk.onchange = () => update(ref(db, "materials/" + m.id), { done: chk.checked });
-        sum.append(chk);
+        chk.onclick = e => { e.stopPropagation(); e.preventDefault(); update(ref(db, "materials/" + m.id), { done: chk.checked }); };
+        row.append(chk);
       }
-      sum.append(el("span", { className: "t" }, m.title), el("span", { className: "tag" }, m.type));
-      const d = el("details", { className: admin && m.done ? "done" : "" }, sum);
-      const body = el("div", { className: "body" });
-      if (m.body) body.append(el("pre", {}, m.body));
-      if (m.url) body.append(el("a", { href: m.url, target: "_blank", rel: "noopener noreferrer" }, m.url));
-      if (!m.body && !m.url) body.append(el("em", {}, "Belum ada isi."));
-      if (admin) body.append(el("div", { className: "acts" },
+      row.append(el("span", { className: "t" }, m.title), el("span", { className: "tag" }, m.type));
+      box.append(row);
+      if (m.body) box.append(el("p", { className: "note" }, m.body));
+      if (admin) box.append(el("div", { className: "acts" },
         el("button", { className: "btn sm", textContent: "Ubah", onclick: () => openMat(m) }),
         el("button", { className: "btn sm danger", textContent: "Hapus", onclick: () => delMat(m) })));
-      d.append(body); box.append(d);
     });
   });
 }
@@ -296,27 +297,50 @@ function openMat(m) {
   editId = m?.id || null;
   $("mTitleH").textContent = m ? "Ubah materi" : "Tambah materi";
   $("mTitle").value = m?.title || ""; $("mWeek").value = m?.week || "";
-  $("mType").value = m?.type || "Catatan"; $("mUrl").value = m?.url || ""; $("mBody").value = m?.body || "";
+  $("mType").value = m?.type || "Slide"; $("mBody").value = m?.body || "";
+  $("mFile").value = ""; $("mErr").textContent = "";
+  $("mCur").textContent = m?.fileName ? "File saat ini: " + m.fileName + " (biarkan kosong untuk tetap memakainya)" : "";
   $("matDlg").showModal();
 }
 $("matForm").onsubmit = async e => {
   e.preventDefault();
-  const data = { title: $("mTitle").value.trim(), week: parseInt($("mWeek").value) || 0,
-    type: $("mType").value, url: $("mUrl").value.trim(), body: $("mBody").value };
-  if (editId) await update(ref(db, "materials/" + editId), data);
-  else await set(push(ref(db, "materials")), { ...data, courseId: current, done: false, createdAt: serverTimestamp() });
-  $("matDlg").close();
+  const file = $("mFile").files[0];
+  if (!file && !editId) { $("mErr").textContent = "Pilih file dulu."; return; }
+  const btn = $("mSubmit"); btn.disabled = true; btn.textContent = "Mengunggah...";
+  $("mErr").textContent = "";
+  try {
+    const data = { title: $("mTitle").value.trim(), week: parseInt($("mWeek").value) || 0,
+      type: $("mType").value, body: $("mBody").value };
+    if (file) {
+      const path = "materials/" + (editId || crypto.randomUUID()) + "/" + file.name;
+      const fref = sref(storage, path);
+      await uploadBytes(fref, file);
+      data.url = await getDownloadURL(fref);
+      data.fileName = file.name;
+      data.filePath = path;
+    }
+    if (editId) await update(ref(db, "materials/" + editId), data);
+    else await set(push(ref(db, "materials")), { ...data, courseId: current, done: false, createdAt: serverTimestamp() });
+    $("matDlg").close();
+  } catch (err) {
+    $("mErr").textContent = "Gagal mengunggah (" + (err.code || err.message) + ").";
+  } finally {
+    btn.disabled = false; btn.textContent = "Simpan materi";
+  }
 };
 
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => b.closest("dialog").close());
 
 // ---------- Hapus ----------
 async function delMat(m) {
-  if (confirm("Hapus materi \"" + m.title + "\"?")) await remove(ref(db, "materials/" + m.id));
+  if (!confirm("Hapus materi \"" + m.title + "\"?")) return;
+  if (m.filePath) try { await deleteObject(sref(storage, m.filePath)); } catch {}
+  await remove(ref(db, "materials/" + m.id));
 }
 async function delCourse(c) {
   const own = mats.filter(m => m.courseId === c.id);
   if (!confirm("Hapus matkul \"" + c.name + "\" beserta " + own.length + " materinya? Ini tidak bisa dibatalkan.")) return;
+  for (const m of own) if (m.filePath) try { await deleteObject(sref(storage, m.filePath)); } catch {}
   const gone = { ["courses/" + c.id]: null };
   own.forEach(m => { gone["materials/" + m.id] = null; });
   await update(ref(db), gone);
