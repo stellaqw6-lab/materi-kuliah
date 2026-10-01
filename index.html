@@ -51,6 +51,10 @@ h2.wk{font-size:.95rem;margin:22px 0 6px;color:var(--muted);font-weight:700}
 .panel code,.panel pre{background:var(--card);border:1px solid var(--line);padding:2px 6px;border-radius:4px;font-size:.85rem}
 .panel pre{padding:12px;overflow-x:auto}
 dialog{border:1px solid var(--ink);border-radius:10px;padding:20px;width:min(480px,92vw);background:var(--paper);color:var(--ink)}
+#viewDlg{width:min(780px,94vw)}
+#vBody img{max-width:100%;display:block;margin:0 auto;border-radius:6px}
+#vBody iframe{width:100%;height:65vh;border:1px solid var(--line);border-radius:6px}
+#vBody .noprev{color:var(--muted);padding:20px 0}
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog h3{margin:0 0 12px}
 dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
@@ -108,6 +112,15 @@ dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
     <label>Warna rak</label><div class="sw" id="cColors"></div>
     <div class="foot"><button type="button" class="btn" data-close>Batal</button><button class="btn solid">Simpan matkul</button></div>
   </form>
+</dialog>
+
+<dialog id="viewDlg">
+  <h3 id="vTitle" style="margin:0 0 10px"></h3>
+  <div id="vBody" style="max-height:70vh;overflow:auto"></div>
+  <div class="foot" style="justify-content:space-between">
+    <button type="button" class="btn" data-close>Tutup</button>
+    <button type="button" class="btn solid" id="vDownload">Unduh file</button>
+  </div>
 </dialog>
 
 <dialog id="matDlg">
@@ -252,12 +265,7 @@ function renderList() {
     box.append(el("h2", { className: "wk" }, w ? "Pertemuan " + w : "Tanpa pertemuan"));
     list.filter(m => (m.week || 0) === w).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(m => {
       const row = el("a", { className: "item" + (admin && m.done ? " done" : ""), href: "#" });
-      row.onclick = async e => {
-        e.preventDefault();
-        if (!m.fileData) return;
-        const blob = await (await fetch(m.fileData)).blob();
-        window.open(URL.createObjectURL(blob), "_blank", "noopener");
-      };
+      row.onclick = e => { e.preventDefault(); if (m.fileData) openView(m); };
       if (admin) {
         const chk = el("input", { type: "checkbox", checked: !!m.done, ariaLabel: "Sudah dipelajari" });
         chk.style.width = "auto";
@@ -273,6 +281,27 @@ function renderList() {
     });
   });
 }
+
+// ---------- Pratinjau & unduh file ----------
+let viewBlobUrl = null;
+async function openView(m) {
+  $("vTitle").textContent = m.title;
+  const vb = $("vBody"); vb.replaceChildren(el("p", { className: "noprev" }, "Memuat pratinjau…"));
+  $("viewDlg").showModal();
+  const blob = await (await fetch(m.fileData)).blob();
+  if (viewBlobUrl) URL.revokeObjectURL(viewBlobUrl);
+  viewBlobUrl = URL.createObjectURL(blob);
+  const type = m.fileType || blob.type || "";
+  vb.replaceChildren();
+  if (type.startsWith("image/")) vb.append(el("img", { src: viewBlobUrl, alt: m.title }));
+  else if (type === "application/pdf") vb.append(el("iframe", { src: viewBlobUrl, title: m.title }));
+  else vb.append(el("p", { className: "noprev" }, "Pratinjau tidak tersedia untuk jenis file ini (" + (m.fileName || type || "tidak diketahui") + "). Gunakan tombol unduh di bawah."));
+  $("vDownload").onclick = () => {
+    const a = el("a", { href: viewBlobUrl, download: m.fileName || "file" });
+    document.body.append(a); a.click(); a.remove();
+  };
+}
+$("viewDlg").addEventListener("close", () => { if (viewBlobUrl) { URL.revokeObjectURL(viewBlobUrl); viewBlobUrl = null; } $("vBody").replaceChildren(); });
 
 // ---------- Dialog matkul ----------
 function openCourse() {
@@ -337,6 +366,7 @@ $("matForm").onsubmit = async e => {
       $("mProgBar").style.width = "100%"; $("mProgTxt").textContent = "100% — " + fmtKB(file.size) + " / " + fmtKB(file.size);
       data.fileData = dataUrl;
       data.fileName = file.name;
+      data.fileType = file.type || "";
     }
     if (editId) await update(ref(db, "materials/" + editId), data);
     else await set(push(ref(db, "materials")), { ...data, courseId: current, done: false, createdAt: serverTimestamp() });
