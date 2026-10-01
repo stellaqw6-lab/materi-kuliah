@@ -6,6 +6,7 @@
 <title>Rak Kuliah</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
 :root{--ink:#1c2733;--muted:#5d6b7a;--paper:#eef1f4;--card:#fbfcfd;--line:#d3dae1;--c:#2d5be3;
 --sans:"Bricolage Grotesque",system-ui,sans-serif;--serif:"Literata",Georgia,serif}
@@ -55,6 +56,11 @@ dialog{border:1px solid var(--ink);border-radius:10px;padding:20px;width:min(480
 #vBody img{max-width:100%;display:block;margin:0 auto;border-radius:6px}
 #vBody iframe{width:100%;height:65vh;border:1px solid var(--line);border-radius:6px}
 #vBody .noprev{color:var(--muted);padding:20px 0}
+#vBody .docprev{font-family:var(--serif);line-height:1.6;max-width:68ch}
+#vBody .docprev h1,#vBody .docprev h2,#vBody .docprev h3{font-family:var(--sans);margin:18px 0 6px}
+#vBody .docprev img{max-width:100%}
+#vBody .docprev table{border-collapse:collapse;margin:10px 0}
+#vBody .docprev td,#vBody .docprev th{border:1px solid var(--line);padding:4px 8px}
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog h3{margin:0 0 12px}
 dialog label{display:block;font-size:.85rem;font-weight:500;margin:10px 0 3px}
@@ -292,10 +298,23 @@ async function openView(m) {
   if (viewBlobUrl) URL.revokeObjectURL(viewBlobUrl);
   viewBlobUrl = URL.createObjectURL(blob);
   const type = m.fileType || blob.type || "";
+  const isDocx = type.includes("wordprocessingml") || /\.docx$/i.test(m.fileName || "");
   vb.replaceChildren();
   if (type.startsWith("image/")) vb.append(el("img", { src: viewBlobUrl, alt: m.title }));
   else if (type === "application/pdf") vb.append(el("iframe", { src: viewBlobUrl, title: m.title }));
-  else vb.append(el("p", { className: "noprev" }, "Pratinjau tidak tersedia untuk jenis file ini (" + (m.fileName || type || "tidak diketahui") + "). Gunakan tombol unduh di bawah."));
+  else if (isDocx && window.mammoth) {
+    vb.append(el("p", { className: "noprev" }, "Memuat dokumen…"));
+    try {
+      const buf = await blob.arrayBuffer();
+      const result = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+      const wrap = el("div", { className: "docprev" });
+      wrap.innerHTML = result.value;
+      vb.replaceChildren(wrap);
+    } catch {
+      vb.replaceChildren(el("p", { className: "noprev" }, "Gagal menampilkan isi dokumen. Gunakan tombol unduh di bawah."));
+    }
+  }
+  else vb.append(el("p", { className: "noprev" }, "Pratinjau tidak tersedia untuk jenis file ini (" + (m.fileName || "tidak diketahui") + "). Gunakan tombol unduh di bawah."));
   $("vDownload").onclick = () => {
     const a = el("a", { href: viewBlobUrl, download: m.fileName || "file" });
     document.body.append(a); a.click(); a.remove();
